@@ -1,7 +1,7 @@
 defmodule PagedFile do
   @moduledoc """
-  Abstraction around `File` and `:file` allowing reads and writes
-  while using a given `page_size` for buffering. This makes
+  [PagedFile](https://github.com/dominicletz/paged_file) provides fast
+  reads and writes by using multiple buffers of `page_size`. This makes
   many `:pread`/`:pwrite` calls faster. Especially useful for read-modify-write
   use cases.
 
