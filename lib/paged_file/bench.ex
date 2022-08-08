@@ -7,7 +7,7 @@ defmodule PagedFile.Bench do
 
     offset = 4
 
-    for x <- 0..10_000 do
+    for x <- 0..100_000 do
       y =
         if x == 0 do
           1
@@ -16,6 +16,28 @@ defmodule PagedFile.Bench do
           y
         end
 
+      :ok = module.pwrite(fp, x * offset, <<y + x::unsigned-size(32)>>)
+    end
+
+    :ok = module.close(fp)
+  end
+
+  def write_test(module, opts) do
+    File.rm("test_file_rand")
+
+    {:ok, fp} = module.open("test_file_rand", opts)
+
+    offset = 4
+
+    for x <- 0..100_000 do
+      y = x + x
+      :ok = module.pwrite(fp, x * offset, <<y + x::unsigned-size(32)>>)
+    end
+
+    :ok = module.sync(fp)
+
+    for x <- 0..100_000 do
+      y = x + x
       :ok = module.pwrite(fp, x * offset, <<y + x::unsigned-size(32)>>)
     end
 
@@ -44,5 +66,6 @@ defmodule PagedFile.Bench do
     context = %{modules: modules, rounds: rounds}
 
     run(context, "read-modify-write", &test/2)
+    run(context, "writes", &write_test/2)
   end
 end
