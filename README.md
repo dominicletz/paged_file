@@ -4,26 +4,37 @@ Faster file access for random read/write loads.
 
 # Note
 
-This has been created to support [DetsPlus](https://github.com/dominicletz/dets_plus) and not to be fully `:file` compatible. The focus has been read-modify-write performance. The repo includes a quick test to compare the performance with the built-in `:file`. The test is doing 10_000 read-modify-write calls:
+This has been created to support [DetsPlus](https://github.com/dominicletz/dets_plus) and not to be fully `:file` compatible. The focus has been read-modify-write performance. The repo includes a quick test to compare the performance with the built-in `:file`. The first test is doing 100_000 read-modify-write calls, the second tests is just issuing many writes:
 
 ```
-$ mix run bench/paged_file.exs 
-Compiling 1 file (.ex)
-running {:file, [:read, :write, :binary]}
-283007μs
-299286μs
-264135μs
-running {:file, [:read, :read_ahead, :write, :delayed_write, :binary]}
-583433μs
-576405μs
-551866μs
-running {PagedFile, []}
-81807μs
-76203μs
-77618μs
+running read-modify-write test: {:file, [:read, :write, :binary]}
+3.05s
+2.733s
+2.822s
+running read-modify-write test: {:file, [:read, :read_ahead, :write, :delayed_write, :binary]}
+5.393s
+5.29s
+5.296s
+running read-modify-write test: {PagedFile, []}
+0.687s
+0.708s
+0.69s
+
+running writes test: {:file, [:read, :write, :binary]}
+2.574s
+2.572s
+2.643s
+running writes test: {:file, [:read, :read_ahead, :write, :delayed_write, :binary]}
+5.217s
+5.169s
+5.256s
+running writes test: {PagedFile, []}
+0.986s
+0.844s
+0.865s
 ```
 
-So on average `PagedFile` is 3.5x faster than `:file` for this task.
+So on average `PagedFile` is 3.5x faster than `:file` for these tasks.
 
 # Example usage
 
