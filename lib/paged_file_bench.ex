@@ -22,18 +22,27 @@ defmodule PagedFile.Bench do
     :ok = module.close(fp)
   end
 
-  def run() do
-    for {module, opts} <- [
-          {:file, [:read, :write, :binary]},
-          {:file, [:read, :read_ahead, :write, :delayed_write, :binary]},
-          {PagedFile, []}
-        ] do
-      IO.puts("running #{inspect({module, opts})}")
+  def run(%{modules: modules, rounds: rounds}, label, fun) do
+    for {module, opts} <- modules do
+      IO.puts("running #{label} test: #{inspect({module, opts})}")
 
-      for _ <- 1..3 do
-        {time, :ok} = :timer.tc(&test/2, [module, opts])
-        IO.puts("#{time}μs")
+      for _ <- 1..rounds do
+        {time, :ok} = :timer.tc(fun, [module, opts])
+        IO.puts("#{div(time, 1000) / 1000}s")
       end
     end
+  end
+
+  def run() do
+    modules = [
+      {:file, [:read, :write, :binary]},
+      {:file, [:read, :read_ahead, :write, :delayed_write, :binary]},
+      {PagedFile, []}
+    ]
+
+    rounds = 3
+    context = %{modules: modules, rounds: rounds}
+
+    run(context, "read-modify-write", &test/2)
   end
 end

@@ -8,10 +8,10 @@ defmodule PagedFile do
   # Example
 
   ```
-  {:ok, fp} = PagedFile.open("test_file")
-  :ok = PagedFile.pwrite(fp, 10, "hello")
-  {:ok, "hello"} = PagedFile.pread(fp, 10, 5)
-  :ok = PagedFile.close(fp)
+  {:ok, fp} = __MODULE__.open("test_file")
+  :ok = __MODULE__.pwrite(fp, 10, "hello")
+  {:ok, "hello"} = __MODULE__.pread(fp, 10, 5)
+  :ok = __MODULE__.close(fp)
   ```
 
   """
@@ -35,7 +35,7 @@ defmodule PagedFile do
 
     {:ok, fp} = :file.open(filename, [:read, :write, :binary])
 
-    state = %PagedFile{
+    state = %__MODULE__{
       fp: fp,
       filename: filename,
       page_size: page_size,
@@ -76,7 +76,10 @@ defmodule PagedFile do
   than calling them one at a time. Returns `:ok`.
   """
   @spec pwrite(atom | pid, [{integer(), binary()}]) :: :ok
-  def pwrite(pid, locnums), do: GenServer.cast(pid, {:pwrite, locnums})
+  def pwrite(pid, locnums) do
+    send(pid, {:pwrite, locnums})
+    :ok
+  end
 
   @doc """
   Writes `data` to the position `loc` in the file. This is call is executed
@@ -121,20 +124,20 @@ defmodule PagedFile do
 
   @impl true
   @doc false
-  def init(state = %PagedFile{}) do
+  def init(state = %__MODULE__{}) do
     {:ok, state}
   end
 
   @impl true
-  def handle_call(:sync, _from, state = %PagedFile{}) do
+  def handle_call(:sync, _from, state = %__MODULE__{}) do
     {:reply, :ok, flush_dirty_pages(state)}
   end
 
-  def handle_call(:info, _from, state = %PagedFile{}) do
+  def handle_call(:info, _from, state = %__MODULE__{}) do
     {:reply, state, state}
   end
 
-  def handle_call({:pread, locnums}, _from, state = %PagedFile{}) do
+  def handle_call({:pread, locnums}, _from, state = %__MODULE__{}) do
     {rets, state} =
       Enum.reduce(locnums, {[], state}, fn {loc, num}, {rets, state} ->
         {ret, state} = do_read(state, loc, num)
@@ -144,7 +147,7 @@ defmodule PagedFile do
     {:reply, rets, state}
   end
 
-  def handle_call({:pwrite, locnums}, _from, state = %PagedFile{}) do
+  def handle_call({:pwrite, locnums}, _from, state = %__MODULE__{}) do
     {rets, state} =
       Enum.reduce(locnums, {[], state}, fn {loc, data}, {rets, state} ->
         {ret, state} = do_write(state, loc, data)
@@ -159,7 +162,9 @@ defmodule PagedFile do
   end
 
   @impl true
-  def handle_cast({:pwrite, locnums}, state = %PagedFile{}) do
+  def handle_info({:pwrite, locnums}, state = %__MODULE__{}) do
+    locnums = locnums ++ collect_pwrites()
+
     state =
       Enum.reduce(locnums, state, fn {loc, data}, state ->
         {_ret, state} = do_write(state, loc, data)
@@ -169,15 +174,31 @@ defmodule PagedFile do
     {:noreply, state}
   end
 
-  defp do_read(state = %PagedFile{filesize: filesize}, loc, _num) when loc >= filesize do
+  defp collect_pwrites() do
+    receive do
+      message ->
+        case message do
+          {:pwrite, locnums} ->
+            locnums ++ collect_pwrites()
+
+          other ->
+            send(self(), other)
+            []
+        end
+    after
+      0 -> []
+    end
+  end
+
+  defp do_read(state = %__MODULE__{filesize: filesize}, loc, _num) when loc >= filesize do
     {:eof, state}
   end
 
-  defp do_read(state = %PagedFile{page_size: page_size, filesize: filesize}, loc, num) do
+  defp do_read(state = %__MODULE__{page_size: page_size, filesize: filesize}, loc, num) do
     page_idx = div(loc, page_size)
     page_start = rem(loc, page_size)
 
-    state = %PagedFile{pages: pages} = load_page(state, page_idx)
+    state = %__MODULE__{pages: pages} = load_page(state, page_idx)
     num = min(filesize - loc, num)
 
     ram_file = Map.get(pages, page_idx)
@@ -192,7 +213,7 @@ defmodule PagedFile do
   end
 
   defp do_write(
-         state = %PagedFile{page_size: page_size},
+         state = %__MODULE__{page_size: page_size},
          loc,
          data
        ) do
@@ -200,7 +221,7 @@ defmodule PagedFile do
     page_start = rem(loc, page_size)
 
     state =
-      %PagedFile{pages: pages, dirty_pages: dirty_pages, filesize: filesize} =
+      %__MODULE__{pages: pages, dirty_pages: dirty_pages, filesize: filesize} =
       load_page(state, page_idx)
 
     write_len = min(page_size - page_start, byte_size(data))
@@ -208,7 +229,7 @@ defmodule PagedFile do
     ram_file = Map.get(pages, page_idx)
     :ok = :file.pwrite(ram_file, page_start, binary_part(data, 0, write_len))
 
-    state = %PagedFile{
+    state = %__MODULE__{
       state
       | filesize: max(filesize, page_size * page_idx + page_start + write_len),
         dirty_pages: MapSet.put(dirty_pages, page_idx)
@@ -225,7 +246,7 @@ defmodule PagedFile do
     end
   end
 
-  defp load_page(state = %PagedFile{pages: pages, page_size: page_size, fp: fp}, page_idx) do
+  defp load_page(state = %__MODULE__{pages: pages, page_size: page_size, fp: fp}, page_idx) do
     if Map.get(pages, page_idx) != nil do
       state
     else
@@ -240,12 +261,12 @@ defmodule PagedFile do
       delta = page_size - byte_size(page)
       page = page <> :binary.copy(<<0>>, delta)
       {:ok, page} = :file.open(page, [:ram, :read, :write, :binary])
-      state = %PagedFile{pages: pages} = flush_pages(state)
-      %PagedFile{state | pages: Map.put(pages, page_idx, page)}
+      state = %__MODULE__{pages: pages} = flush_pages(state)
+      %__MODULE__{state | pages: Map.put(pages, page_idx, page)}
     end
   end
 
-  defp flush_pages(state = %PagedFile{pages: pages, max_pages: max_pages}) do
+  defp flush_pages(state = %__MODULE__{pages: pages, max_pages: max_pages}) do
     if map_size(pages) > max_pages do
       count = trunc(map_size(pages) / 10) + 1
 
@@ -257,12 +278,12 @@ defmodule PagedFile do
     end
   end
 
-  defp flush_dirty_pages(state = %PagedFile{dirty_pages: dirty_pages}) do
+  defp flush_dirty_pages(state = %__MODULE__{dirty_pages: dirty_pages}) do
     Enum.reduce(dirty_pages, state, fn page_idx, state -> flush_page(state, page_idx) end)
   end
 
   defp flush_page(
-         state = %PagedFile{
+         state = %__MODULE__{
            pages: pages,
            dirty_pages: dirty_pages,
            fp: fp,
@@ -285,6 +306,6 @@ defmodule PagedFile do
       end
 
     :file.close(page)
-    %PagedFile{state | pages: pages, dirty_pages: dirty_pages}
+    %__MODULE__{state | pages: pages, dirty_pages: dirty_pages}
   end
 end
