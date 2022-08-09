@@ -16,7 +16,7 @@ defmodule PagedFile do
 
   """
   use GenServer
-  defstruct [:fp, :filename, :page_size, :max_pages, :pages, :dirty_pages, :filesize]
+  defstruct [:fp, :filename, :page_size, :max_pages, :pages, :pq, :dirty_pages, :filesize]
 
   @doc """
 
@@ -42,6 +42,7 @@ defmodule PagedFile do
       max_pages: max_pages,
       filesize: File.stat!(filename).size,
       pages: %{},
+      pq: :queue.new(),
       dirty_pages: MapSet.new()
     }
 
@@ -130,7 +131,7 @@ defmodule PagedFile do
 
   @impl true
   def handle_call(:sync, _from, state = %__MODULE__{}) do
-    {:reply, :ok, flush_dirty_pages(state)}
+    {:reply, :ok, sync_dirty_pages(state)}
   end
 
   def handle_call(:info, _from, state = %__MODULE__{}) do
@@ -246,7 +247,10 @@ defmodule PagedFile do
     end
   end
 
-  defp load_page(state = %__MODULE__{pages: pages, page_size: page_size, fp: fp}, page_idx) do
+  defp load_page(
+         state = %__MODULE__{pages: pages, page_size: page_size, pq: pq, fp: fp},
+         page_idx
+       ) do
     if Map.get(pages, page_idx) != nil do
       state
     else
@@ -262,27 +266,23 @@ defmodule PagedFile do
       page = page <> :binary.copy(<<0>>, delta)
       {:ok, page} = :file.open(page, [:ram, :read, :write, :binary])
       state = %__MODULE__{pages: pages} = flush_pages(state)
-      %__MODULE__{state | pages: Map.put(pages, page_idx, page)}
+      %__MODULE__{state | pages: Map.put(pages, page_idx, page), pq: :queue.in(page_idx, pq)}
     end
   end
 
   defp flush_pages(state = %__MODULE__{pages: pages, max_pages: max_pages}) do
     if map_size(pages) > max_pages do
-      count = trunc(map_size(pages) / 10) + 1
-
-      Map.keys(pages)
-      |> Enum.take(count)
-      |> Enum.reduce(state, fn page_idx, state -> flush_page(state, page_idx) end)
+      flush_page(state)
     else
       state
     end
   end
 
-  defp flush_dirty_pages(state = %__MODULE__{dirty_pages: dirty_pages}) do
-    Enum.reduce(dirty_pages, state, fn page_idx, state -> flush_page(state, page_idx) end)
+  defp sync_dirty_pages(state = %__MODULE__{dirty_pages: dirty_pages}) do
+    Enum.reduce(dirty_pages, state, fn page_idx, state -> sync_page(state, page_idx) end)
   end
 
-  defp flush_page(
+  defp sync_page(
          state = %__MODULE__{
            pages: pages,
            dirty_pages: dirty_pages,
@@ -292,20 +292,28 @@ defmodule PagedFile do
          },
          page_idx
        ) do
-    {page, pages} = Map.pop(pages, page_idx)
+    loc = page_idx * page_size
+    num = min(filesize - loc, page_size)
+    {:ok, data} = :file.pread(Map.get(pages, page_idx), 0, num)
+    :file.pwrite(fp, loc, data)
+    dirty_pages = MapSet.delete(dirty_pages, page_idx)
+    %__MODULE__{state | dirty_pages: dirty_pages}
+  end
 
-    dirty_pages =
+  defp flush_page(state = %__MODULE__{dirty_pages: dirty_pages, pq: pq}) do
+    {:value, page_idx} = :queue.peek(pq)
+
+    state =
+      %__MODULE__{pages: pages, pq: ^pq} =
       if MapSet.member?(dirty_pages, page_idx) do
-        loc = page_idx * page_size
-        num = min(filesize - loc, page_size)
-        {:ok, data} = :file.pread(page, 0, num)
-        :file.pwrite(fp, loc, data)
-        MapSet.delete(dirty_pages, page_idx)
+        sync_page(state, page_idx)
       else
-        dirty_pages
+        state
       end
 
+    {page, pages} = Map.pop(pages, page_idx)
+    {{:value, ^page_idx}, pq} = :queue.out(pq)
     :file.close(page)
-    %__MODULE__{state | pages: pages, dirty_pages: dirty_pages}
+    %__MODULE__{state | pages: pages, pq: pq}
   end
 end
