@@ -67,7 +67,7 @@ defmodule PagedFile do
   @doc """
   Executes are of `num` bytes at the position `loc`.
   """
-  def pread(pid, loc, num) do
+  def pread(pid, loc, num) when loc >= 0 and num >= 0 do
     case call(pid, {:pread, [{loc, num}]}) do
       [bin] when is_binary(bin) -> {:ok, bin}
       [:eof] -> :eof
@@ -90,7 +90,7 @@ defmodule PagedFile do
   asynchrounosly and the file size is extended if needed to complete this call.
   """
   @spec pwrite(atom | pid, integer(), binary()) :: :ok
-  def pwrite(pid, loc, data), do: pwrite(pid, [{loc, data}])
+  def pwrite(pid, loc, data) when loc >= 0, do: pwrite(pid, [{loc, data}])
 
   @doc """
   Ensures that any all pages that have changes are written to disk.
