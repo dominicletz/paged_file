@@ -16,7 +16,7 @@ defmodule PagedFile do
 
   """
   use GenServer
-  defstruct [:fp, :filename, :page_size, :max_pages, :pages, :pq, :dirty_pages, :filesize]
+  defstruct [:fp, :filename, :page_size, :max_pages, :pages, :pq, :dirty_pages, :file_size]
 
   @doc """
 
@@ -33,14 +33,17 @@ defmodule PagedFile do
     page_size = Keyword.get(args, :page_size, 512_000)
     max_pages = Keyword.get(args, :max_pages, 250)
 
-    {:ok, fp} = :file.open(filename, [:read, :write, :binary])
+    file_size =
+      case File.stat(filename) do
+        {:ok, %File.Stat{size: size}} -> size
+        _ -> 0
+      end
 
     state = %__MODULE__{
-      fp: fp,
       filename: filename,
       page_size: page_size,
       max_pages: max_pages,
-      filesize: File.stat!(filename).size,
+      file_size: file_size,
       pages: %{},
       pq: :queue.new(),
       dirty_pages: MapSet.new()
@@ -125,8 +128,10 @@ defmodule PagedFile do
 
   @impl true
   @doc false
-  def init(state = %__MODULE__{}) do
-    {:ok, state}
+  def init(state = %__MODULE__{filename: filename}) do
+    with {:ok, fp} <- :file.open(filename, [:read, :write, :binary]) do
+      {:ok, %__MODULE__{state | fp: fp}}
+    end
   end
 
   @impl true
@@ -191,16 +196,16 @@ defmodule PagedFile do
     end
   end
 
-  defp do_read(state = %__MODULE__{filesize: filesize}, loc, _num) when loc >= filesize do
+  defp do_read(state = %__MODULE__{file_size: file_size}, loc, _num) when loc >= file_size do
     {:eof, state}
   end
 
-  defp do_read(state = %__MODULE__{page_size: page_size, filesize: filesize}, loc, num) do
+  defp do_read(state = %__MODULE__{page_size: page_size, file_size: file_size}, loc, num) do
     page_idx = div(loc, page_size)
     page_start = rem(loc, page_size)
 
     state = %__MODULE__{pages: pages} = load_page(state, page_idx)
-    num = min(filesize - loc, num)
+    num = min(file_size - loc, num)
 
     ram_file = Map.get(pages, page_idx)
     {:ok, data} = :file.pread(ram_file, page_start, num)
@@ -222,7 +227,7 @@ defmodule PagedFile do
     page_start = rem(loc, page_size)
 
     state =
-      %__MODULE__{pages: pages, dirty_pages: dirty_pages, filesize: filesize} =
+      %__MODULE__{pages: pages, dirty_pages: dirty_pages, file_size: file_size} =
       load_page(state, page_idx)
 
     write_len = min(page_size - page_start, byte_size(data))
@@ -232,7 +237,7 @@ defmodule PagedFile do
 
     state = %__MODULE__{
       state
-      | filesize: max(filesize, page_size * page_idx + page_start + write_len),
+      | file_size: max(file_size, page_size * page_idx + page_start + write_len),
         dirty_pages: MapSet.put(dirty_pages, page_idx)
     }
 
@@ -287,13 +292,13 @@ defmodule PagedFile do
            pages: pages,
            dirty_pages: dirty_pages,
            fp: fp,
-           filesize: filesize,
+           file_size: file_size,
            page_size: page_size
          },
          page_idx
        ) do
     loc = page_idx * page_size
-    num = min(filesize - loc, page_size)
+    num = min(file_size - loc, page_size)
     {:ok, data} = :file.pread(Map.get(pages, page_idx), 0, num)
     :file.pwrite(fp, loc, data)
     dirty_pages = MapSet.delete(dirty_pages, page_idx)
