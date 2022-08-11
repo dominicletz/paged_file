@@ -137,7 +137,7 @@ defmodule PagedFile do
   @impl true
   @doc false
   def init(state = %__MODULE__{filename: filename}) do
-    with {:ok, fp} <- :file.open(filename, [:read, :write, :binary]) do
+    with {:ok, fp} <- :file.open(filename, [:raw, :read, :write, :binary]) do
       {:ok, %__MODULE__{state | fp: fp}}
     end
   end
