@@ -100,6 +100,14 @@ defmodule PagedFile do
     call(pid, :sync)
   end
 
+  @doc """
+  Returns the current file size
+  """
+  @spec size(atom | pid) :: non_neg_integer()
+  def size(pid) do
+    call(pid, :size)
+  end
+
   @doc false
   def info(pid) do
     call(pid, :info)
@@ -135,6 +143,10 @@ defmodule PagedFile do
   end
 
   @impl true
+  def handle_call(:size, _from, state = %__MODULE__{file_size: file_size}) do
+    {:reply, file_size, state}
+  end
+
   def handle_call(:sync, _from, state = %__MODULE__{}) do
     {:reply, :ok, sync_dirty_pages(state)}
   end

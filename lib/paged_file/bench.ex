@@ -58,7 +58,9 @@ defmodule PagedFile.Bench do
   def run() do
     modules = [
       {:file, [:read, :write, :binary]},
+      {:file, [:raw, :read, :write, :binary]},
       {:file, [:read, :read_ahead, :write, :delayed_write, :binary]},
+      {:file, [:raw, :read, :read_ahead, :write, :delayed_write, :binary]},
       {PagedFile, []}
     ]
 
