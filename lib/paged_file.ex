@@ -264,10 +264,7 @@ defmodule PagedFile do
     end
   end
 
-  defp load_page(
-         state = %__MODULE__{pages: pages, page_size: page_size, pq: pq, fp: fp},
-         page_idx
-       ) do
+  defp load_page(state = %__MODULE__{pages: pages, page_size: page_size, fp: fp}, page_idx) do
     if Map.get(pages, page_idx) != nil do
       state
     else
@@ -282,7 +279,7 @@ defmodule PagedFile do
       delta = page_size - byte_size(page)
       page = page <> :binary.copy(<<0>>, delta)
       {:ok, page} = :file.open(page, [:ram, :read, :write, :binary])
-      state = %__MODULE__{pages: pages} = flush_pages(state)
+      state = %__MODULE__{pages: pages, pq: pq} = flush_pages(state)
       %__MODULE__{state | pages: Map.put(pages, page_idx, page), pq: :queue.in(page_idx, pq)}
     end
   end
