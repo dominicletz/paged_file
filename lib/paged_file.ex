@@ -59,6 +59,10 @@ defmodule PagedFile do
   if the requested position is beyond end of file.
   """
   @spec pread(atom | pid, [{integer(), integer()}]) :: {:ok, [binary() | :eof]}
+  def pread(_pid, []) do
+    {:ok, []}
+  end
+
   def pread(pid, locnums) do
     {:ok, call(pid, {:pread, locnums})}
   end
@@ -80,6 +84,10 @@ defmodule PagedFile do
   than calling them one at a time. Returns `:ok`.
   """
   @spec pwrite(atom | pid, [{integer(), binary()}]) :: :ok
+  def pwrite(_pid, []) do
+    :ok
+  end
+
   def pwrite(pid, locnums) do
     send(pid, {:pwrite, locnums})
     :ok
