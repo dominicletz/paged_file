@@ -36,24 +36,25 @@ defmodule PagedFile.Test do
       filename = "page_file_test_eof"
 
       testset = [
-        {144, 10},
-        {128 * 2, 10},
-        {145, 10}
+        {144, 10, :eof},
+        {142, 10, {:ok, "34"}},
+        {128 * 2, 10, :eof},
+        {145, 10, :eof}
       ]
 
-      for {offset, num} <- testset do
+      for {offset, num, expect} <- testset do
         File.rm(filename)
         {:ok, fp} = PagedFile.open(filename, page_size: 128)
         assert PagedFile.pwrite(fp, 140, "1234") == :ok
 
-        assert PagedFile.pread(fp, offset, num) == :eof
+        assert PagedFile.pread(fp, offset, num) == expect
         PagedFile.sync(fp)
-        assert PagedFile.pread(fp, offset, num) == :eof
+        assert PagedFile.pread(fp, offset, num) == expect
         PagedFile.close(fp)
 
         # actual file test
         {:ok, fp} = :file.open(filename, [:read, :binary])
-        assert :file.pread(fp, offset, num) == :eof
+        assert :file.pread(fp, offset, num) == expect
         :file.close(fp)
       end
     end

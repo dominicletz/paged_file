@@ -163,10 +163,18 @@ defmodule PagedFile do
     {:reply, state, state}
   end
 
-  def handle_call({:pread, locnums}, _from, state = %__MODULE__{}) do
+  def handle_call({:pread, locnums}, _from, state = %__MODULE__{file_size: file_size}) do
     {rets, state} =
       Enum.reduce(locnums, {[], state}, fn {loc, num}, {rets, state} ->
-        {ret, state} = do_read(state, loc, num)
+        {ret, state} =
+          if loc >= file_size do
+            {:eof, state}
+          else
+            {ret, state} = do_read(state, loc, num)
+            ret = :erlang.iolist_to_binary(ret)
+            {ret, state}
+          end
+
         {rets ++ [ret], state}
       end)
 
@@ -217,7 +225,11 @@ defmodule PagedFile do
   end
 
   defp do_read(state = %__MODULE__{file_size: file_size}, loc, _num) when loc >= file_size do
-    {:eof, state}
+    {[], state}
+  end
+
+  defp do_read(state = %__MODULE__{}, _loc, 0) do
+    {[], state}
   end
 
   defp do_read(state = %__MODULE__{page_size: page_size, file_size: file_size}, loc, num) do
@@ -232,9 +244,9 @@ defmodule PagedFile do
 
     if byte_size(data) < num do
       {rest, state} = do_read(state, (page_idx + 1) * page_size, num - byte_size(data))
-      {data <> rest, state}
+      {[data | rest], state}
     else
-      {data, state}
+      {[data], state}
     end
   end
 
