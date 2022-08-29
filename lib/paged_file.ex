@@ -251,27 +251,32 @@ defmodule PagedFile do
   end
 
   defp do_write(
-         state = %__MODULE__{page_size: page_size},
+         state = %__MODULE__{page_size: page_size, pages: pages, fp: fp, file_size: file_size},
          loc,
          data
        ) do
     page_idx = div(loc, page_size)
     page_start = rem(loc, page_size)
-
-    state =
-      %__MODULE__{pages: pages, dirty_pages: dirty_pages, file_size: file_size} =
-      load_page(state, page_idx)
-
     write_len = min(page_size - page_start, byte_size(data))
-
-    ram_file = Map.get(pages, page_idx)
-    :ok = :file.pwrite(ram_file, page_start, binary_part(data, 0, write_len))
 
     state = %__MODULE__{
       state
-      | file_size: max(file_size, page_size * page_idx + page_start + write_len),
-        dirty_pages: MapSet.put(dirty_pages, page_idx)
+      | file_size: max(file_size, page_size * page_idx + page_start + write_len)
     }
+
+    # optimization when the write covers the whole page
+    state =
+      if Map.has_key?(pages, page_idx) == false and write_len == page_size do
+        :file.pwrite(fp, loc, binary_part(data, 0, write_len))
+        state
+      else
+        state = %__MODULE__{pages: pages, dirty_pages: dirty_pages} = load_page(state, page_idx)
+
+        ram_file = Map.get(pages, page_idx)
+        :ok = :file.pwrite(ram_file, page_start, binary_part(data, 0, write_len))
+
+        %__MODULE__{state | dirty_pages: MapSet.put(dirty_pages, page_idx)}
+      end
 
     if write_len < byte_size(data) do
       do_write(
