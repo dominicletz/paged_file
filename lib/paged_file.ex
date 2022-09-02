@@ -8,15 +8,26 @@ defmodule PagedFile do
   # Example
 
   ```
-  {:ok, fp} = __MODULE__.open("test_file")
-  :ok = __MODULE__.pwrite(fp, 10, "hello")
-  {:ok, "hello"} = __MODULE__.pread(fp, 10, 5)
-  :ok = __MODULE__.close(fp)
+  {:ok, fp} = PagedFile.open("test_file")
+  :ok = PagedFile.pwrite(fp, 10, "hello")
+  {:ok, "hello"} = PagedFile.pread(fp, 10, 5)
+  :ok = PagedFile.close(fp)
   ```
 
   """
   use GenServer
-  defstruct [:fp, :filename, :page_size, :max_pages, :pages, :pq, :dirty_pages, :file_size]
+
+  defstruct [
+    :fp,
+    :filename,
+    :page_size,
+    :max_pages,
+    :pages,
+    :pq,
+    :dirty_pages,
+    :file_size,
+    :priority
+  ]
 
   @doc """
 
@@ -25,6 +36,7 @@ defmodule PagedFile do
 
   - `page_size` - The default page size of loading disk data into memory and writing it back again.
   - `max_pages` - The maximum number of pages that should be kept in memory.
+  - `priority` - The process priority of the PagedReader.
 
   """
   @spec open(binary | list(), keyword) :: {:ok, pid}
@@ -32,6 +44,7 @@ defmodule PagedFile do
     # default 0.5mb page size with 250 pages max (up to 125mb)
     page_size = Keyword.get(args, :page_size, 512_000)
     max_pages = Keyword.get(args, :max_pages, 250)
+    priority = Keyword.get(args, :priority, :normal)
 
     file_size =
       case File.stat(filename) do
@@ -46,7 +59,8 @@ defmodule PagedFile do
       file_size: file_size,
       pages: %{},
       pq: :queue.new(),
-      dirty_pages: MapSet.new()
+      dirty_pages: MapSet.new(),
+      priority: priority
     }
 
     GenServer.start_link(__MODULE__, state, hibernate_after: 5_000)
@@ -144,7 +158,9 @@ defmodule PagedFile do
 
   @impl true
   @doc false
-  def init(state = %__MODULE__{filename: filename}) do
+  def init(state = %__MODULE__{filename: filename, priority: priority}) do
+    Process.flag(:priority, priority)
+
     with {:ok, fp} <- :file.open(filename, [:raw, :read, :write, :binary]) do
       {:ok, %__MODULE__{state | fp: fp}}
     end
