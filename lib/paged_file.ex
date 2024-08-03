@@ -17,8 +17,17 @@ defmodule PagedFile do
   """
   use GenServer
 
+  defmodule Handle do
+    @moduledoc false
+    defstruct [:pid, :cnt]
+    @type t :: %__MODULE__{}
+  end
+
+  alias __MODULE__.Handle
+
   defstruct [
     :fp,
+    :cnt,
     :filename,
     :page_size,
     :max_pages,
@@ -39,7 +48,7 @@ defmodule PagedFile do
   - `priority` - The process priority of the PagedReader.
 
   """
-  @spec open(binary | list(), keyword) :: {:ok, pid}
+  @spec open(binary | list(), keyword) :: {:ok, Handle.t()}
   def open(filename, args \\ []) do
     # default 0.5mb page size with 250 pages max (up to 125mb)
     page_size = Keyword.get(args, :page_size, 512_000)
@@ -52,8 +61,11 @@ defmodule PagedFile do
         _ -> 0
       end
 
+    cnt = :atomics.new(1, signed: false)
+
     state = %__MODULE__{
       filename: filename,
+      cnt: cnt,
       page_size: page_size,
       max_pages: max_pages,
       file_size: file_size,
@@ -63,7 +75,9 @@ defmodule PagedFile do
       priority: priority
     }
 
-    GenServer.start_link(__MODULE__, state, hibernate_after: 5_000)
+    with {:ok, pid} <- GenServer.start_link(__MODULE__, state, hibernate_after: 5_000) do
+      {:ok, %Handle{pid: pid, cnt: cnt}}
+    end
   end
 
   @doc """
@@ -72,21 +86,21 @@ defmodule PagedFile do
   where each Data, the result of the corresponding pread, is a binary or `:eof`
   if the requested position is beyond end of file.
   """
-  @spec pread(atom | pid, [{integer(), integer()}]) :: {:ok, [binary() | :eof]}
+  @spec pread(Handle.t(), [{integer(), integer()}]) :: {:ok, [binary() | :eof]}
   def pread(_pid, []) do
     {:ok, []}
   end
 
-  def pread(pid, locnums) do
-    {:ok, call(pid, {:pread, locnums})}
+  def pread(pfile, locnums) do
+    {:ok, call(pfile, {:pread, locnums})}
   end
 
-  @spec pread(atom | pid, integer(), integer()) :: {:ok, binary()} | :eof
+  @spec pread(Handle.t(), integer(), integer()) :: {:ok, binary()} | :eof
   @doc """
   Executes are of `num` bytes at the position `loc`.
   """
-  def pread(pid, loc, num) when loc >= 0 and num >= 0 do
-    case call(pid, {:pread, [{loc, num}]}) do
+  def pread(pfile, loc, num) when loc >= 0 and num >= 0 do
+    case call(pfile, {:pread, [{loc, num}]}) do
       [bin] when is_binary(bin) -> {:ok, bin}
       [:eof] -> :eof
       [error] when is_atom(error) -> {:error, error}
@@ -97,50 +111,61 @@ defmodule PagedFile do
   Performs a sequence of `pwrite/3` in one operation, which is more efficient
   than calling them one at a time. Returns `:ok`.
   """
-  @spec pwrite(atom | pid, [{integer(), binary()}]) :: :ok
-  def pwrite(_pid, []) do
+  @spec pwrite(Handle.t(), [{integer(), binary()}]) :: :ok
+  def pwrite(_pfile, []) do
     :ok
   end
 
-  def pwrite(pid, locnums) do
+  @max_async 10
+  def pwrite(%Handle{pid: pid, cnt: cnt}, locnums) do
+    num = :atomics.add_get(cnt, 1, 1)
     send(pid, {:pwrite, locnums})
+    if num > @max_async, do: backpressure(cnt)
     :ok
+  end
+
+  defp backpressure(cnt) do
+    Process.sleep(10)
+
+    if :atomics.get(cnt, 1) > @max_async do
+      backpressure(cnt)
+    end
   end
 
   @doc """
   Writes `data` to the position `loc` in the file. This is call is executed
   asynchrounosly and the file size is extended if needed to complete this call.
   """
-  @spec pwrite(atom | pid, integer(), binary()) :: :ok
-  def pwrite(pid, loc, data) when loc >= 0, do: pwrite(pid, [{loc, data}])
+  @spec pwrite(Handle.t(), integer(), binary()) :: :ok
+  def pwrite(pfile, loc, data) when loc >= 0, do: pwrite(pfile, [{loc, data}])
 
   @doc """
   Ensures that any all pages that have changes are written to disk.
   """
-  @spec sync(atom | pid) :: :ok
-  def sync(pid) do
-    call(pid, :sync)
+  @spec sync(Handle.t()) :: :ok
+  def sync(pfile) do
+    call(pfile, :sync)
   end
 
   @doc """
   Returns the current file size
   """
-  @spec size(atom | pid) :: non_neg_integer()
-  def size(pid) do
-    call(pid, :size)
+  @spec size(Handle.t()) :: non_neg_integer()
+  def size(pfile) do
+    call(pfile, :size)
   end
 
   @doc false
-  def info(pid) do
-    call(pid, :info)
+  def info(pfile) do
+    call(pfile, :info)
   end
 
   @doc """
   Writes all pending changes to disk and closes the file.
   """
-  @spec close(atom | pid) :: :ok
-  def close(pid) do
-    sync(pid)
+  @spec close(Handle.t()) :: :ok
+  def close(pfile = %Handle{pid: pid}) do
+    sync(pfile)
     GenServer.stop(pid)
   end
 
@@ -152,7 +177,7 @@ defmodule PagedFile do
     :file.delete(filename)
   end
 
-  defp call(pid, cmd) do
+  defp call(%Handle{pid: pid}, cmd) do
     GenServer.call(pid, cmd, :infinity)
   end
 
@@ -212,8 +237,9 @@ defmodule PagedFile do
   end
 
   @impl true
-  def handle_info({:pwrite, locnums}, state = %__MODULE__{}) do
-    locnums = locnums ++ collect_pwrites()
+  def handle_info({:pwrite, locnums}, state = %__MODULE__{cnt: cnt}) do
+    {locnums, num} = collect_pwrites(locnums, 1)
+    :atomics.sub(cnt, 1, num)
 
     state =
       Enum.reduce(locnums, state, fn {loc, data}, state ->
@@ -224,19 +250,19 @@ defmodule PagedFile do
     {:noreply, state}
   end
 
-  defp collect_pwrites() do
+  defp collect_pwrites(locnums, num) do
     receive do
       message ->
         case message do
-          {:pwrite, locnums} ->
-            locnums ++ collect_pwrites()
+          {:pwrite, locnums2} ->
+            collect_pwrites(locnums ++ locnums2, num + 1)
 
           other ->
             send(self(), other)
-            []
+            {locnums, num}
         end
     after
-      0 -> []
+      0 -> {locnums, num}
     end
   end
 
