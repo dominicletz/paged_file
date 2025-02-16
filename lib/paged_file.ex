@@ -117,19 +117,11 @@ defmodule PagedFile do
   end
 
   @max_async 10
-  def pwrite(%Handle{pid: pid, cnt: cnt}, locnums) do
+  def pwrite(hndl = %Handle{pid: pid, cnt: cnt}, locnums) do
     num = :atomics.add_get(cnt, 1, 1)
     send(pid, {:pwrite, locnums})
-    if num > @max_async, do: backpressure(cnt)
+    if num > @max_async, do: sync(hndl)
     :ok
-  end
-
-  defp backpressure(cnt) do
-    Process.sleep(10)
-
-    if :atomics.get(cnt, 1) > @max_async do
-      backpressure(cnt)
-    end
   end
 
   @doc """
