@@ -1,7 +1,7 @@
 defmodule PagedFile.MixProject do
   use Mix.Project
 
-  @version "1.1.2"
+  @version "1.1.3"
   @name "PagedFile"
   @url "https://github.com/dominicletz/paged_file"
   @maintainers ["Dominic Letz"]
